@@ -1,0 +1,89 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* ── 全局基础样式 ──────────────────────────────────── */
+@layer base {
+  html {
+    -webkit-text-size-adjust: 100%;
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  body {
+    @apply bg-cream text-gray-800 antialiased;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    overscroll-behavior-y: none;
+  }
+
+  /* 安全区域适配 (iPhone 刘海/底部) */
+  .safe-top { padding-top: env(safe-area-inset-top); }
+  .safe-bottom { padding-bottom: env(safe-area-inset-bottom); }
+}
+
+/* ── 可复用组件样式 ────────────────────────────────── */
+@layer components {
+  /* 主按钮 - 自然绿 */
+  .btn-primary {
+    @apply bg-nature-500 text-white font-semibold rounded-xl py-3.5 px-6
+           active:bg-nature-600 transition-all shadow-sm
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* 次按钮 - 描边 */
+  .btn-outline {
+    @apply border-2 border-nature-500 text-nature-600 font-semibold rounded-xl py-3.5 px-6
+           active:bg-nature-50 transition-all;
+  }
+
+  /* 卡片 - 圆角白色 */
+  .card {
+    @apply bg-white rounded-2xl shadow-sm p-4;
+  }
+
+  /* 输入框 */
+  .input-field {
+    @apply w-full bg-white rounded-xl border border-gray-200 px-4 py-3 text-base
+           focus:border-nature-500 focus:ring-2 focus:ring-nature-500/20
+           outline-none transition-all;
+  }
+
+  /* 标签 */
+  .tag {
+    @apply inline-flex items-center px-3 py-1 rounded-full text-xs font-medium;
+  }
+  .tag-nature { @apply bg-nature-100 text-nature-700; }
+  .tag-sky    { @apply bg-sky-100 text-sky-700; }
+  .tag-warm   { @apply bg-orange-100 text-orange-700; }
+
+  /* 渐变背景 */
+  .gradient-nature {
+    background: linear-gradient(135deg, #2D9D5F 0%, #3B9AE1 100%);
+  }
+  .gradient-hero {
+    background: linear-gradient(180deg, #dcfce7 0%, #FAFBF7 100%);
+  }
+}
+
+/* ── 地图容器 ──────────────────────────────────────── */
+#map-container, .map-container {
+  width: 100%;
+  height: 100%;
+  min-height: 300px;
+}
+
+/* ── 滚动条隐藏 (移动端) ──────────────────────────── */
+.no-scrollbar::-webkit-scrollbar { display: none; }
+.no-scrollbar { -ms-overflow-style: none; scrollbar-width: none; }
+
+/* ── 腾讯地图标记样式 ──────────────────────────────── */
+.custom-poi-marker {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+  border: 2px solid white;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.25);
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+.custom-poi-marker:hover { transform: scale(1.15); }
