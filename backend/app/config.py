@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     LLM_MODEL: str = "deepseek-chat"
     # Stronger model for content enrichment (scenic/food/history)
     LLM_MODEL_STRONG: str = "deepseek-chat"
-    LLM_TIMEOUT: int = 120
+    LLM_TIMEOUT: int = 300  # 5 min - reasoning models (deepseek-v4-pro) need more time
     LLM_TEMPERATURE: float = 0.8
 
     # ── Tencent Maps (腾讯位置服务) ────────────────────────────────────────

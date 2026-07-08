@@ -54,44 +54,89 @@ def to_polyline_pairs(coors: List[float]) -> List[List[float]]:
     return [[lat, lng] for lat, lng in decode_polyline(coors)]
 
 
+# Common Chinese city coordinates (GCJ-02) - fallback when API quota exhausted
+CITY_COORDS_FALLBACK = {
+    "北京": (39.9042, 116.4074), "Beijing": (39.9042, 116.4074),
+    "上海": (31.2304, 121.4737), "Shanghai": (31.2304, 121.4737),
+    "广州": (23.1291, 113.2644), "深圳": (22.5431, 114.0579),
+    "成都": (30.5728, 104.0668), "重庆": (29.5630, 106.5516),
+    "杭州": (30.2741, 120.1551), "南京": (32.0603, 118.7969),
+    "武汉": (30.5928, 114.3055), "西安": (34.3416, 108.9398),
+    "长沙": (28.2282, 112.9388), "天津": (39.3434, 117.3616),
+    "苏州": (31.2989, 120.5853), "郑州": (34.7466, 113.6253),
+    "沈阳": (41.8057, 123.4315), "长春": (43.8171, 125.3235),
+    "哈尔滨": (45.8038, 126.5350), "大连": (38.9140, 121.6147),
+    "呼和浩特": (40.8426, 111.7497), "乌鲁木齐": (43.8256, 87.6168),
+    "兰州": (36.0611, 103.8343), "银川": (38.4872, 106.2309),
+    "西宁": (36.6171, 101.7782), "拉萨": (29.6500, 91.1409),
+    "昆明": (25.0389, 102.7183), "贵阳": (26.6470, 106.6302),
+    "南宁": (22.8170, 108.3669), "海口": (20.0444, 110.1989),
+    "太原": (37.8706, 112.5489), "石家庄": (38.0428, 114.5149),
+    "济南": (36.6512, 117.1201), "青岛": (36.0671, 120.3826),
+    "合肥": (31.8206, 117.2272), "南昌": (28.6820, 115.8579),
+    "福州": (26.0745, 119.2965), "厦门": (24.4798, 118.0894),
+    "承德": (40.9510, 117.9626), "漠河": (52.9749, 122.5349),
+    "齐齐哈尔": (47.3540, 123.9183), "加格达奇": (50.4240, 124.1140),
+    "通辽": (43.6527, 122.2437), "赤峰": (42.2570, 118.8892),
+    "延吉": (42.8917, 129.5097), "丹东": (40.1295, 124.3936),
+    "额济纳旗": (41.9545, 101.0558), "稻城": (28.4314, 100.3316),
+    "康定": (30.0486, 101.9625), "伊犁": (43.9191, 81.3245),
+    "额尔古纳": (50.2410, 120.1830), "室韦": (51.3470, 119.7520),
+    "呼伦贝尔": (49.2112, 119.7661), "满洲里": (49.5965, 117.4306),
+}
+
+
 async def geocode(address: str) -> Optional[Dict[str, Any]]:
     """Geocode an address to coordinates.
 
     Returns: {"lat": float, "lng": float, "city": str, "province": str, "adcode": str}
-    or None on failure.
+    or None on failure. Falls back to built-in city coordinates if API fails.
     """
     key = _key()
-    if not key:
-        return None  # signal failure so callers can handle gracefully
 
-    try:
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            resp = await client.get(
-                f"{BASE_URL}/ws/geocoder/v1/",
-                params={"address": address, "key": key},
-            )
-            resp.raise_for_status()
-            data = resp.json()
+    # Try API first if key available
+    if key:
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(
+                    f"{BASE_URL}/ws/geocoder/v1/",
+                    params={"address": address, "key": key},
+                )
+                resp.raise_for_status()
+                data = resp.json()
 
-        if data.get("status") != 0:
-            logger.error(f"Tencent geocode error: {data.get('message')}")
-            return None
+            if data.get("status") == 0:
+                result = data["result"]
+                loc = result["location"]
+                components = result.get("address_components", {})
+                ad_info = result.get("ad_info", {})
 
-        result = data["result"]
-        loc = result["location"]
-        components = result.get("address_components", {})
-        ad_info = result.get("ad_info", {})
+                return {
+                    "lat": loc["lat"],
+                    "lng": loc["lng"],
+                    "city": components.get("city", "") or address,
+                    "province": components.get("province", ""),
+                    "adcode": ad_info.get("adcode", ""),
+                }
+            else:
+                logger.warning(f"Tencent geocode error: {data.get('message')}")
+        except Exception as e:
+            logger.warning(f"Geocode API call failed for '{address}': {e}")
 
-        return {
-            "lat": loc["lat"],
-            "lng": loc["lng"],
-            "city": components.get("city", "") or address,
-            "province": components.get("province", ""),
-            "adcode": ad_info.get("adcode", ""),
-        }
-    except Exception as e:
-        logger.error(f"Geocode failed for '{address}': {e}")
-        return None
+    # Fallback: use built-in city coordinates
+    if address in CITY_COORDS_FALLBACK:
+        lat, lng = CITY_COORDS_FALLBACK[address]
+        logger.info(f"Using fallback coordinates for {address}: {lat}, {lng}")
+        return {"lat": lat, "lng": lng, "city": address, "province": "", "adcode": ""}
+
+    # Try partial match (e.g. "北京市" -> "北京")
+    for city_name, (lat, lng) in CITY_COORDS_FALLBACK.items():
+        if city_name in address or address in city_name:
+            logger.info(f"Using fallback coordinates (partial match) for {address}: {city_name}")
+            return {"lat": lat, "lng": lng, "city": address, "province": "", "adcode": ""}
+
+    logger.error(f"Could not geocode '{address}' - no fallback available")
+    return None
 
 
 async def reverse_geocode(lat: float, lng: float) -> Optional[Dict[str, Any]]:
