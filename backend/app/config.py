@@ -21,14 +21,15 @@ class Settings(BaseSettings):
     # SQLite fallback for local dev without Docker
     DATABASE_URL_DEV: str = "sqlite:///./offroadtrip.db"
 
-    # ── LLM via silk-gateway (OpenAI-compatible) ──────────────────────────
-    # Your own Cloudflare Workers gateway supporting DeepSeek / Doubao / Kimi
+    # ── LLM via Volcengine Ark (火山方舟 Agent Plan) ──────────────────────
+    # OpenAI-compatible endpoint: https://ark.cn-beijing.volces.com/api/plan/v3
+    # Supports glm-5.2 (1M context, reasoning model), deepseek, doubao, etc.
     SILK_GATEWAY_URL: str = ""
     SILK_GATEWAY_KEY: str = ""
-    # Default model for route planning - use fast non-reasoning model
-    LLM_MODEL: str = "deepseek-chat"
-    # Stronger model for content enrichment (scenic/food/history) - can use reasoning model
-    LLM_MODEL_STRONG: str = "deepseek-chat"
+    # Default model for route planning
+    LLM_MODEL: str = "glm-5.2"
+    # Stronger model for content enrichment (scenic/food/history)
+    LLM_MODEL_STRONG: str = "glm-5.2"
     LLM_TIMEOUT: int = 300  # 5 min - reasoning models (deepseek-v4-pro) need more time
     LLM_TEMPERATURE: float = 0.8
 
