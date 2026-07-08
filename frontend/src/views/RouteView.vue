@@ -11,6 +11,7 @@ const mapContainer = ref(null)
 const mapInstance = ref(null)
 const TMapInstance = ref(null)
 const mapError = ref(false)
+const mapErrorType = ref('') // 'no_key' | 'no_data' | 'init_failed'
 const viewMode = ref('map') // 'map' or 'list'
 const selectedDay = ref(0)
 const sheetExpanded = ref(false)
@@ -34,32 +35,72 @@ onMounted(async () => {
   }
 })
 
+// Fallback city coordinates (GCJ-02) for when API polyline is unavailable
+const CITY_COORDS = {
+  '北京': [39.9042, 116.4074], '上海': [31.2304, 121.4737], '广州': [23.1291, 113.2644],
+  '深圳': [22.5431, 114.0579], '成都': [30.5728, 104.0668], '重庆': [29.5630, 106.5516],
+  '杭州': [30.2741, 120.1551], '南京': [32.0603, 118.7969], '武汉': [30.5928, 114.3055],
+  '西安': [34.3416, 108.9398], '沈阳': [41.8057, 123.4315], '长春': [43.8171, 125.3235],
+  '哈尔滨': [45.8038, 126.5350], '大连': [38.9140, 121.6147], '承德': [40.9510, 117.9626],
+  '漠河': [52.9749, 122.5349], '齐齐哈尔': [47.3540, 123.9183], '呼和浩特': [40.8426, 111.7497],
+  '乌鲁木齐': [43.8256, 87.6168], '兰州': [36.0611, 103.8343], '拉萨': [29.6500, 91.1409],
+  '昆明': [25.0389, 102.7183], '天津': [39.3434, 117.3616], '青岛': [36.0671, 120.3826],
+  '太原': [37.8706, 112.5489], '济南': [36.6512, 117.1201], '郑州': [34.7466, 113.6253],
+}
+
+function cityToCoord(name) {
+  if (!name) return null
+  if (CITY_COORDS[name]) return CITY_COORDS[name]
+  for (const [city, coord] of Object.entries(CITY_COORDS)) {
+    if (name.includes(city) || city.includes(name)) return coord
+  }
+  return null
+}
+
 async function initMap() {
   if (!hasMapKey()) {
     mapError.value = true
+    mapErrorType.value = 'no_key'
     return
   }
 
   try {
-    // Collect all points for initial bounds
+    // Collect all points: prefer polyline, fall back to POI coords, then city coords
     const allPoints = []
     for (const day of days.value) {
       for (const seg of day.segments || []) {
-        if (seg.polyline) {
+        if (seg.polyline && seg.polyline.length > 0) {
           allPoints.push(...seg.polyline)
+        }
+      }
+      // Also collect POI coordinates
+      for (const poi of day.pois || []) {
+        if (poi.lat && poi.lng) {
+          allPoints.push([poi.lat, poi.lng])
         }
       }
     }
 
+    // If no polyline/POI coords, use departure/destination city coords as fallback
+    if (allPoints.length === 0) {
+      const dep = route.value?.departure
+      const dest = route.value?.destination
+      const depCoord = cityToCoord(dep)
+      const destCoord = cityToCoord(dest)
+      if (depCoord) allPoints.push(depCoord)
+      if (destCoord) allPoints.push(destCoord)
+    }
+
     if (allPoints.length === 0) {
       mapError.value = true
+      mapErrorType.value = 'no_data'
       return
     }
 
     const center = allPoints[Math.floor(allPoints.length / 2)]
     const { map, TMap } = await createMap(mapContainer.value, {
       center,
-      zoom: 6,
+      zoom: 5,
       pitch: 45,
       satellite: false,
     })
@@ -67,7 +108,7 @@ async function initMap() {
     mapInstance.value = map
     TMapInstance.value = TMap
 
-    // Draw polylines for each day
+    // Draw polylines for each day (only if available)
     days.value.forEach((day, dayIndex) => {
       for (const seg of day.segments || []) {
         if (seg.polyline && seg.polyline.length > 1) {
@@ -75,11 +116,24 @@ async function initMap() {
         }
       }
 
-      // Add POI markers
-      const pois = (day.pois || []).map(p => ({
-        ...p,
-        category: p.category || p.type || 'default',
-      }))
+      // Add POI markers (use POI coords or city fallback coords)
+      const pois = (day.pois || []).map(p => {
+        let lat = p.lat
+        let lng = p.lng
+        // If POI has no coords, try to infer from segment city names
+        if ((!lat || !lng) && day.segments?.length > 0) {
+          const cityName = day.segments[0].to_name || day.segments[0].from_name
+          const coord = cityToCoord(cityName)
+          if (coord) { lat = coord[0]; lng = coord[1] }
+        }
+        return {
+          ...p,
+          lat: lat || 0,
+          lng: lng || 0,
+          category: p.category || p.type || 'default',
+        }
+      }).filter(p => p.lat && p.lng)
+
       if (pois.length > 0) {
         addPOIMarkers(map, TMap, pois)
       }
@@ -90,6 +144,7 @@ async function initMap() {
   } catch (e) {
     console.error('Map init failed:', e)
     mapError.value = true
+    mapErrorType.value = 'init_failed'
   }
 }
 
@@ -168,9 +223,21 @@ function formatDuration(hours) {
 
       <!-- Map error / placeholder -->
       <div v-if="mapError" class="absolute inset-0 flex flex-col items-center justify-center bg-cream p-8">
-        <span class="text-4xl mb-3">🗺️</span>
-        <p class="text-sm text-gray-500 text-center mb-2">地图可视化需要配置腾讯地图 Key</p>
-        <p class="text-xs text-gray-400 text-center">请在 .env 中设置 VITE_QQ_MAP_JS_KEY</p>
+        <template v-if="mapErrorType === 'no_key'">
+          <span class="text-4xl mb-3">🗺️</span>
+          <p class="text-sm text-gray-500 text-center mb-2">地图可视化需要配置腾讯地图 Key</p>
+          <p class="text-xs text-gray-400 text-center">请在 .env 中设置 VITE_QQ_MAP_JS_KEY</p>
+        </template>
+        <template v-else-if="mapErrorType === 'no_data'">
+          <span class="text-4xl mb-3">📍</span>
+          <p class="text-sm text-gray-500 text-center mb-2">暂无地图坐标数据</p>
+          <p class="text-xs text-gray-400 text-center">路线生成时地图API配额可能已用尽，请切换列表模式查看行程</p>
+        </template>
+        <template v-else>
+          <span class="text-4xl mb-3">⚠️</span>
+          <p class="text-sm text-gray-500 text-center mb-2">地图加载失败</p>
+          <p class="text-xs text-gray-400 text-center">请检查网络连接后重试，或切换列表模式</p>
+        </template>
       </div>
     </div>
 

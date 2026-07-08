@@ -118,7 +118,12 @@ export async function createMap(containerId, options = {}) {
 export function drawPolyline(map, TMap, polyline, color = '#2D9D5F', width = 6) {
   if (!polyline || polyline.length < 2) return null
 
-  const path = polyline.map(([lat, lng]) => new TMap.LatLng(lat, lng))
+  // Filter out invalid coordinate pairs (missing lat/lng)
+  const validPath = polyline
+    .filter(p => Array.isArray(p) && p.length >= 2 && p[0] && p[1])
+    .map(([lat, lng]) => new TMap.LatLng(lat, lng))
+
+  if (validPath.length < 2) return null
 
   const polylineLayer = new TMap.MultiPolyline({
     map,
@@ -135,7 +140,7 @@ export function drawPolyline(map, TMap, polyline, color = '#2D9D5F', width = 6) 
       {
         id: 'route',
         styleId: 'default',
-        positions: path,
+        positions: validPath,
       },
     ],
   })
@@ -187,13 +192,14 @@ export function addPOIMarkers(map, TMap, pois) {
 
 /**
  * Create a data URI marker icon with emoji.
+ * Uses encodeURIComponent instead of btoa to support Unicode emoji characters.
  */
 function createMarkerIcon(emoji, bgColor) {
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="32" height="32">
     <circle cx="16" cy="16" r="14" fill="${bgColor}" stroke="white" stroke-width="2"/>
     <text x="16" y="22" font-size="16" text-anchor="middle">${emoji}</text>
   </svg>`
-  return 'data:image/svg+xml;base64,' + btoa(svg)
+  return 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(svg)
 }
 
 /**
