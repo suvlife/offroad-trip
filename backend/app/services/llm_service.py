@@ -4,6 +4,7 @@ Supports DeepSeek / Doubao / Kimi via the gateway's unified endpoint.
 Handles reasoning models (deepseek-v4-pro) that return reasoning_content + content.
 """
 
+import asyncio
 import json
 import logging
 from typing import Any, Dict, List, Optional
@@ -66,13 +67,18 @@ async def call_llm(
         "Content-Type": "application/json",
     }
 
-    try:
-        async with httpx.AsyncClient(timeout=float(settings.LLM_TIMEOUT)) as client:
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers=headers,
-                json=payload,
-            )
+    # Retry logic for network errors (silk-gateway may drop long-running connections)
+    max_retries = 3
+    last_error = None
+
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=float(settings.LLM_TIMEOUT)) as client:
+                resp = await client.post(
+                    f"{base_url}/chat/completions",
+                    headers=headers,
+                    json=payload,
+                )
 
             # Log non-200 responses for debugging
             if resp.status_code != 200:
@@ -83,37 +89,49 @@ async def call_llm(
 
             data = resp.json()
 
-        choice = data["choices"][0]
-        message = choice.get("message", {})
+            choice = data["choices"][0]
+            message = choice.get("message", {})
 
-        # Reasoning models (deepseek-v4-pro) have both reasoning_content and content.
-        # The actual answer is in "content"; reasoning_content is the chain-of-thought.
-        content = message.get("content", "") or ""
+            # Reasoning models (deepseek-v4-pro) have both reasoning_content and content.
+            # The actual answer is in "content"; reasoning_content is the chain-of-thought.
+            content = message.get("content", "") or ""
 
-        # If content is empty but reasoning_content exists, the model may have used
-        # all tokens on reasoning. Log a warning.
-        if not content and message.get("reasoning_content"):
-            reasoning = message.get("reasoning_content", "")
-            logger.warning(
-                f"LLM returned empty content but has reasoning_content "
-                f"({len(reasoning)} chars). Consider increasing max_tokens. "
-                f"Finish reason: {choice.get('finish_reason')}"
+            # If content is empty but reasoning_content exists, the model may have used
+            # all tokens on reasoning. Log a warning.
+            if not content and message.get("reasoning_content"):
+                reasoning = message.get("reasoning_content", "")
+                logger.warning(
+                    f"LLM returned empty content but has reasoning_content "
+                    f"({len(reasoning)} chars). Consider increasing max_tokens. "
+                    f"Finish reason: {choice.get('finish_reason')}"
+                )
+
+            logger.info(
+                f"LLM call OK: model={model_name}, "
+                f"content={len(content)} chars, "
+                f"finish={choice.get('finish_reason')}, "
+                f"tokens={data.get('usage', {}).get('total_tokens', '?')}"
             )
 
-        logger.info(
-            f"LLM call OK: model={model_name}, "
-            f"content={len(content)} chars, "
-            f"finish={choice.get('finish_reason')}, "
-            f"tokens={data.get('usage', {}).get('total_tokens', '?')}"
-        )
+            return content.strip()
 
-        return content.strip()
-    except httpx.HTTPStatusError as e:
-        logger.error(f"LLM HTTP error: {e.response.status_code} - {e.response.text[:300]}")
-        raise
-    except Exception as e:
-        logger.error(f"LLM call failed: {e}")
-        raise
+        except httpx.HTTPStatusError as e:
+            last_error = e
+            logger.error(f"LLM HTTP error (attempt {attempt+1}/{max_retries}): {e.response.status_code}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)  # exponential backoff
+            else:
+                raise
+        except (httpx.ReadError, httpx.ReadTimeout, httpx.ConnectError) as e:
+            last_error = e
+            logger.warning(f"LLM network error (attempt {attempt+1}/{max_retries}): {type(e).__name__}: {e}")
+            if attempt < max_retries - 1:
+                await asyncio.sleep(2 ** attempt)  # exponential backoff
+            else:
+                logger.error(f"LLM call failed after {max_retries} retries: {e}")
+                raise
+
+    raise last_error
 
 
 def parse_json_response(content: str) -> dict:

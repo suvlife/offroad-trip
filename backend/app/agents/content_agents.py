@@ -41,7 +41,7 @@ async def enrich_scenic(city: str, pois: List[Dict]) -> List[Dict]:
 
     try:
         content = await llm_service.call_llm(
-            prompt=prompt, system_prompt=system, json_mode=True, max_tokens=4096
+            prompt=prompt, system_prompt=system, json_mode=True, max_tokens=16384
         )
         result = llm_service.parse_json_response(content)
         enriched_pois = result.get("pois", [])
@@ -83,7 +83,7 @@ async def enrich_food(city: str, meals: List[Dict]) -> List[Dict]:
 
     try:
         content = await llm_service.call_llm(
-            prompt=prompt, system_prompt=system, json_mode=True, max_tokens=4096
+            prompt=prompt, system_prompt=system, json_mode=True, max_tokens=16384
         )
         result = llm_service.parse_json_response(content)
         enriched_meals = result.get("meals", [])
@@ -117,7 +117,7 @@ async def enrich_history(city: str, scenic_names: List[str]) -> List[Dict]:
 
     try:
         content = await llm_service.call_llm(
-            prompt=prompt, system_prompt=system, json_mode=True, max_tokens=4096
+            prompt=prompt, system_prompt=system, json_mode=True, max_tokens=16384
         )
         result = llm_service.parse_json_response(content)
         stories = result.get("stories", [])

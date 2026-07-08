@@ -53,7 +53,7 @@ async def plan_route(
             prompt=prompt,
             system_prompt=PLANNER_SYSTEM,
             json_mode=True,
-            max_tokens=8192,
+            max_tokens=32768,  # reasoning model needs lots of tokens for thinking + output
         )
         result = llm_service.parse_json_response(content)
 
