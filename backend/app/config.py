@@ -25,9 +25,9 @@ class Settings(BaseSettings):
     # Your own Cloudflare Workers gateway supporting DeepSeek / Doubao / Kimi
     SILK_GATEWAY_URL: str = ""
     SILK_GATEWAY_KEY: str = ""
-    # Default model for route planning (cheap & capable)
+    # Default model for route planning - use fast non-reasoning model
     LLM_MODEL: str = "deepseek-chat"
-    # Stronger model for content enrichment (scenic/food/history)
+    # Stronger model for content enrichment (scenic/food/history) - can use reasoning model
     LLM_MODEL_STRONG: str = "deepseek-chat"
     LLM_TIMEOUT: int = 300  # 5 min - reasoning models (deepseek-v4-pro) need more time
     LLM_TEMPERATURE: float = 0.8

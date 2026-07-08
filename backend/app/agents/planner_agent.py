@@ -53,7 +53,8 @@ async def plan_route(
             prompt=prompt,
             system_prompt=PLANNER_SYSTEM,
             json_mode=True,
-            max_tokens=32768,  # reasoning model needs lots of tokens for thinking + output
+            max_tokens=16384,
+            temperature=0.3,  # lower temp = faster reasoning, more deterministic
         )
         result = llm_service.parse_json_response(content)
 
