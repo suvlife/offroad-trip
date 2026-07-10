@@ -4,7 +4,7 @@ import logging
 from typing import List
 
 from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, selectinload
 
 from app.database import get_db
 from app.models.route import Route, DayPlan, RouteSegment, POI, Meal, Hotel, StoryCard, DouyinLink, WeatherForecast
@@ -35,7 +35,7 @@ async def list_routes(
 @router.get("/routes/{route_id}", response_model=RouteOut)
 async def get_route(route_id: str, db: Session = Depends(get_db)):
     """Get a route by ID with all related data."""
-    route = db.query(Route).filter(Route.id == route_id).first()
+    route = _load_route_with_relations(db, Route.id == route_id)
     if not route:
         raise HTTPException(status_code=404, detail="路线不存在")
 
@@ -43,7 +43,7 @@ async def get_route(route_id: str, db: Session = Depends(get_db)):
     route.view_count = (route.view_count or 0) + 1
     db.commit()
 
-    return _build_route_out(route, db)
+    return _build_route_out(route)
 
 
 @router.post("/routes/{route_id}/share")
@@ -59,26 +59,51 @@ async def share_route(route_id: str, db: Session = Depends(get_db)):
     return {"share_id": route.share_id, "url": f"/share/{route.share_id}"}
 
 
+@router.delete("/routes/{route_id}")
+async def delete_route(route_id: str, db: Session = Depends(get_db)):
+    """Delete a route and all its related data."""
+    route = db.query(Route).filter(Route.id == route_id).first()
+    if not route:
+        raise HTTPException(status_code=404, detail="路线不存在")
+
+    db.delete(route)
+    db.commit()
+    return {"success": True}
+
+
 @router.get("/share/{share_id}", response_model=RouteOut)
 async def get_share(share_id: str, db: Session = Depends(get_db)):
     """Get route by share ID (public, read-only)."""
-    route = db.query(Route).filter(Route.share_id == share_id).first()
+    route = _load_route_with_relations(db, Route.share_id == share_id)
     if not route:
         raise HTTPException(status_code=404, detail="分享链接无效")
 
-    return _build_route_out(route, db)
+    return _build_route_out(route)
 
 
-def _build_route_out(route: Route, db: Session) -> dict:
-    """Build the full RouteOut dict with all nested data."""
-    # Load all related data
-    day_plans = (
-        db.query(DayPlan)
-        .filter(DayPlan.route_id == route.id)
-        .order_by(DayPlan.day_number)
-        .all()
+def _load_route_with_relations(db: Session, *filters):
+    """Load a route with all nested relationships in a single query."""
+    return (
+        db.query(Route)
+        .options(
+            selectinload(Route.day_plans)
+                .selectinload(DayPlan.segments),
+            selectinload(Route.day_plans)
+                .selectinload(DayPlan.pois),
+            selectinload(Route.day_plans)
+                .selectinload(DayPlan.meals),
+            selectinload(Route.day_plans)
+                .selectinload(DayPlan.hotels),
+            selectinload(Route.story_cards),
+            selectinload(Route.weather_forecasts),
+        )
+        .filter(*filters)
+        .first()
     )
 
+
+def _build_route_out(route: Route) -> dict:
+    """Build the full RouteOut dict from an eagerly-loaded route."""
     result = {
         "id": route.id,
         "share_id": route.share_id,
@@ -104,22 +129,7 @@ def _build_route_out(route: Route, db: Session) -> dict:
         "story_cards": [],
     }
 
-    for dp in day_plans:
-        segments = (
-            db.query(RouteSegment)
-            .filter(RouteSegment.day_plan_id == dp.id)
-            .order_by(RouteSegment.sort_order)
-            .all()
-        )
-        pois = (
-            db.query(POI)
-            .filter(POI.day_plan_id == dp.id)
-            .order_by(POI.sort_order)
-            .all()
-        )
-        meals = db.query(Meal).filter(Meal.day_plan_id == dp.id).all()
-        hotels = db.query(Hotel).filter(Hotel.day_plan_id == dp.id).all()
-
+    for dp in route.day_plans:
         day_out = {
             "id": dp.id,
             "route_id": dp.route_id,
@@ -138,8 +148,8 @@ def _build_route_out(route: Route, db: Session) -> dict:
             "hotels": [],
         }
 
-        for seg in segments:
-            seg_pois = [p for p in pois if p.segment_id == seg.id]
+        # Segments with their POIs
+        for seg in dp.segments:
             day_out["segments"].append({
                 "id": seg.id,
                 "day_plan_id": seg.day_plan_id,
@@ -151,14 +161,15 @@ def _build_route_out(route: Route, db: Session) -> dict:
                 "fuel_cost": seg.fuel_cost,
                 "polyline": seg.polyline or [],
                 "sort_order": seg.sort_order,
-                "pois": [_poi_to_dict(p) for p in seg_pois],
+                "pois": [_poi_to_dict(p) for p in seg.pois],
             })
 
-        for poi in pois:
+        # Day-level POIs (no segment assigned)
+        for poi in dp.pois:
             if not poi.segment_id:
                 day_out["pois"].append(_poi_to_dict(poi))
 
-        for meal in meals:
+        for meal in dp.meals:
             day_out["meals"].append({
                 "id": meal.id,
                 "day_plan_id": meal.day_plan_id,
@@ -174,7 +185,7 @@ def _build_route_out(route: Route, db: Session) -> dict:
                 "image_urls": meal.image_urls or [],
             })
 
-        for hotel in hotels:
+        for hotel in dp.hotels:
             day_out["hotels"].append({
                 "id": hotel.id,
                 "day_plan_id": hotel.day_plan_id,
@@ -191,9 +202,7 @@ def _build_route_out(route: Route, db: Session) -> dict:
 
         result["day_plans"].append(day_out)
 
-    # Story cards
-    stories = db.query(StoryCard).filter(StoryCard.route_id == route.id).all()
-    for s in stories:
+    for s in route.story_cards:
         result["story_cards"].append({
             "id": s.id,
             "route_id": s.route_id,
@@ -206,9 +215,7 @@ def _build_route_out(route: Route, db: Session) -> dict:
             "image_url": s.image_url,
         })
 
-    # Weather forecasts
-    forecasts = db.query(WeatherForecast).filter(WeatherForecast.route_id == route.id).all()
-    for f in forecasts:
+    for f in route.weather_forecasts:
         result["weather_forecasts"].append({
             "id": f.id,
             "route_id": f.route_id,

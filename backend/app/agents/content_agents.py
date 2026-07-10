@@ -175,7 +175,7 @@ async def enrich_all_cities(route_data: Dict[str, Any]) -> Dict[str, Any]:
         tasks.append(enrich_food(city, data["meals"]))
         tasks.append(enrich_history(city, data["scenic_names"]))
 
-    results = await asyncio.gather(*results if False else [], return_exceptions=True) if False else await _run_tasks(tasks, cities)
+    results = await _run_tasks(tasks, cities)
 
     # Collect all story cards
     all_stories = []

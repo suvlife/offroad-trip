@@ -2,6 +2,7 @@
 import { ref, onMounted, computed } from 'vue'
 import { useRouter } from 'vue-router'
 import { useRouteStore } from '@/stores/route'
+import { api } from '@/api'
 import { STAGES } from '@/utils/sse'
 
 const router = useRouter()
@@ -17,9 +18,23 @@ onMounted(async () => {
   const route = await store.generateRoute()
 
   if (route) {
-    // Brief pause to show completion, then navigate to route detail
+    // Fetch the route list to get the actual ID (saved to DB after SSE completes)
+    try {
+      const response = await api.getRoutes({ page: 1, page_size: 1 })
+      const routes = response.data
+      if (routes?.length > 0) {
+        // The most recent route should be the one we just generated
+        const actualId = routes[0].id
+        setTimeout(() => {
+          router.replace({ name: 'route-detail', params: { id: actualId } })
+        }, 800)
+        return
+      }
+    } catch (e) {
+      console.warn('Failed to fetch route list:', e)
+    }
+    // Fallback: navigate with latest (will try to load from store)
     setTimeout(() => {
-      // The route is in currentRoute, navigate to a virtual route view
       router.replace({ name: 'route-detail', params: { id: 'latest' } })
     }, 800)
   }

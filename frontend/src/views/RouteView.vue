@@ -3,6 +3,14 @@ import { ref, onMounted, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useRouteStore } from '@/stores/route'
 import { createMap, drawPolyline, addPOIMarkers, fitBounds, DAY_COLORS, hasMapKey } from '@/utils/qqmap'
+import MarkdownIt from 'markdown-it'
+
+const md = new MarkdownIt({ html: false, breaks: true })
+
+function renderMarkdown(text) {
+  if (!text) return ''
+  return md.render(text)
+}
 
 const router = useRouter()
 const store = useRouteStore()
@@ -388,6 +396,12 @@ function formatDuration(hours) {
               </div>
             </div>
           </div>
+        </div>
+
+        <!-- Overall tips (markdown) -->
+        <div v-if="route?.overall_tips" class="mb-4">
+          <p class="text-xs text-gray-400 font-medium mb-2">💡 出行建议</p>
+          <div class="card p-3 prose prose-xs max-w-none text-gray-600" v-html="renderMarkdown(route.overall_tips)"></div>
         </div>
       </div>
     </div>

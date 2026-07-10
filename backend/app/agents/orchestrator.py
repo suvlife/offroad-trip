@@ -237,6 +237,12 @@ async def generate_route_stream(
         )
         route_data["cost_breakdown"] = cost_breakdown
 
+        # Pass weather_map through for DB persistence
+        route_data["_weather_map"] = {
+            city: data.get("forecasts", [])
+            for city, data in weather_map.items()
+        }
+
         yield await _emit("assembly", "done", "组装完成", 100)
 
         # ─── Final event: complete route data ──────────────────────────────

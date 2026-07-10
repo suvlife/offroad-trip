@@ -9,7 +9,7 @@ from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.database import get_db
+from app.database import get_db, SessionLocal
 from app.schemas.route import GenerateRequest, RouteCreate, DayPlanCreate, RouteSegmentCreate
 from app.models.route import Route, DayPlan, RouteSegment, POI, Meal, Hotel, StoryCard, DouyinLink, WeatherForecast
 from app.agents.orchestrator import generate_route_stream
@@ -19,7 +19,7 @@ router = APIRouter()
 
 
 @router.post("/generate")
-async def generate_route(req: GenerateRequest, db: Session = Depends(get_db)):
+async def generate_route(req: GenerateRequest):
     """Generate a route plan via the 6-stage agent pipeline.
 
     Returns an SSE stream: progress events + final route data.
@@ -53,12 +53,16 @@ async def generate_route(req: GenerateRequest, db: Session = Depends(get_db)):
                     except json.JSONDecodeError:
                         pass
         finally:
-            # Save to database after streaming completes
+            # Save to database with a fresh session and inject the ID
             if final_route_data:
+                db = SessionLocal()
                 try:
-                    _save_route_to_db(db, final_route_data)
+                    route_id = _save_route_to_db(db, final_route_data)
+                    final_route_data["id"] = route_id
                 except Exception as e:
                     logger.error(f"Failed to save route to DB: {e}")
+                finally:
+                    db.close()
 
     return StreamingResponse(
         event_stream(),
@@ -127,30 +131,29 @@ def _save_route_to_db(db: Session, route_data: dict):
                 sort_order=seg_data.get("sort_order", 0),
             )
             db.add(seg)
-            db.flush()
 
-            # Save POIs for this segment
-            for poi_data in day_data.get("pois", []):
-                poi = POI(
-                    day_plan_id=day_plan.id,
-                    segment_id=seg.id,
-                    type=poi_data.get("type", "scenic"),
-                    category=poi_data.get("category", "scenic"),
-                    name=poi_data.get("name", ""),
-                    lat=poi_data.get("lat", 0),
-                    lng=poi_data.get("lng", 0),
-                    rating=poi_data.get("rating", 0),
-                    price_level=poi_data.get("price_level", ""),
-                    image_url=poi_data.get("image_url", ""),
-                    description=poi_data.get("description", ""),
-                    duration_minutes=poi_data.get("duration_minutes", 0),
-                    sort_order=poi_data.get("sort_order", 0),
-                    feature=poi_data.get("feature", ""),
-                    anecdote=poi_data.get("anecdote", ""),
-                    historical_figure=poi_data.get("historical_figure", ""),
-                    historical_event=poi_data.get("historical_event", ""),
-                )
-                db.add(poi)
+        # Save POIs (per-day, not per-segment)
+        for poi_data in day_data.get("pois", []):
+            poi = POI(
+                day_plan_id=day_plan.id,
+                segment_id=None,
+                type=poi_data.get("type", "scenic"),
+                category=poi_data.get("category", "scenic"),
+                name=poi_data.get("name", ""),
+                lat=poi_data.get("lat", 0),
+                lng=poi_data.get("lng", 0),
+                rating=poi_data.get("rating", 0),
+                price_level=poi_data.get("price_level", ""),
+                image_url=poi_data.get("image_url", ""),
+                description=poi_data.get("description", ""),
+                duration_minutes=poi_data.get("duration_minutes", 0),
+                sort_order=poi_data.get("sort_order", 0),
+                feature=poi_data.get("feature", ""),
+                anecdote=poi_data.get("anecdote", ""),
+                historical_figure=poi_data.get("historical_figure", ""),
+                historical_event=poi_data.get("historical_event", ""),
+            )
+            db.add(poi)
 
         # Save meals
         for meal_data in day_data.get("meals", []):
@@ -210,5 +213,24 @@ def _save_route_to_db(db: Session, route_data: dict):
         )
         db.add(dl)
 
+    # Save weather forecasts
+    weather_map = route_data.get("_weather_map", {})
+    for city, forecasts in weather_map.items():
+        for f in forecasts:
+            wf = WeatherForecast(
+                route_id=route.id,
+                city_name=city,
+                date=f.get("date", ""),
+                temperature_high=f.get("temperature_high", 0),
+                temperature_low=f.get("temperature_low", 0),
+                weather_condition=f.get("weather_condition", ""),
+                icon=f.get("icon", ""),
+                humidity=f.get("humidity", 0),
+                wind_speed=f.get("wind_speed", 0),
+                precipitation=f.get("precipitation", 0),
+            )
+            db.add(wf)
+
     db.commit()
     logger.info(f"Route saved: {route.id} (share_id: {share_id})")
+    return route.id

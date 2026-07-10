@@ -7,7 +7,7 @@ mapping done via aliases). This fixes the selfdrivetrip field mismatch issue.
 from datetime import datetime
 from typing import List, Optional, Any
 
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, field_validator
 
 
 # ─── POI ────────────────────────────────────────────────────────────────────
@@ -298,18 +298,27 @@ class GenerateRequest(BaseModel):
 
     Field names unified - frontend sends these exact names.
     """
-    departure: str
-    destination: str
+    departure: str = Field(..., min_length=2, max_length=50)
+    destination: str = Field(..., min_length=2, max_length=50)
     start_date: str = ""  # e.g. "2026-07-08"
-    days: int = 3
+    days: int = Field(default=3, ge=1, le=30)
     trip_type: str = "越野自驾"
-    adults: int = 2
-    children: int = 0
+    adults: int = Field(default=2, ge=1, le=20)
+    children: int = Field(default=0, ge=0, le=10)
     vehicle_type: str = "SUV"
-    budget: float = 8000.0
+    budget: float = Field(default=8000.0, ge=0, le=1000000)
     theme: str = "回归自然"
     preferences: List[str] = Field(default_factory=list)  # 自然风光/人文历史/美食/越野探险
     session_id: str = ""
+
+    @field_validator("departure", "destination")
+    @classmethod
+    def sanitize_city(cls, v: str) -> str:
+        import re
+        v = re.sub(r"[^\u4e00-\u9fa5a-zA-Z\s]", "", v.strip())
+        if not v:
+            raise ValueError("城市名不能为空")
+        return v
 
 
 class GenerateResponse(BaseModel):

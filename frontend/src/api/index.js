@@ -40,6 +40,11 @@ export const api = {
     return apiClient.get(`/api/routes/${id}`)
   },
 
+  // Delete route
+  deleteRoute(id) {
+    return apiClient.delete(`/api/routes/${id}`)
+  },
+
   // Share a route
   shareRoute(id) {
     return apiClient.post(`/api/routes/${id}/share`)
