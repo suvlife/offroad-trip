@@ -51,5 +51,4 @@ new_sqlite_classes = ["ProgressCoordinator"]
 LLM_MODEL = "ark-code-latest"
 SILK_GATEWAY_URL = "https://ark.cn-beijing.volces.com/api/plan/v3"
 WORKERS_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
-LLM_TIMEOUT_MS = "300000"
 NOMINATIM_UA = "offroad-trip/1.0 (https://offroad.guofeng.me)"

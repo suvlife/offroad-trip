@@ -14,7 +14,6 @@ export interface Env {
   LLM_MODEL: string;
   SILK_GATEWAY_URL?: string;
   WORKERS_AI_MODEL: string;
-  LLM_TIMEOUT_MS: string;
   NOMINATIM_UA: string;
 
   // secrets (wrangler secret put) — external gateway keys. If unset, Workers AI is used.

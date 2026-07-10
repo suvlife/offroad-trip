@@ -10,6 +10,13 @@
  *   2. Cloudflare Workers AI (env.AI) — the free, no-key fallback if neither
  *      gateway key is configured or both fail.
  *
+ * Retries live ONLY at the Workflow step level (workflow.ts's step.do config) —
+ * this module makes exactly one HTTP attempt per key with a hard timeout. Layering
+ * retries here on top of the Workflow's own step retries multiplies worst-case
+ * latency (retries × keys × Workflow attempts) past the step timeout, which is
+ * exactly what caused planning to hang for hours: a slow call got killed by the
+ * Workflow timeout mid-retry, then retried the whole over-budget operation again.
+ *
  * Ported from backend/app/services/llm_service.py.
  */
 
@@ -24,6 +31,10 @@ interface LlmOptions {
 }
 
 type ChatMessage = { role: "system" | "user" | "assistant"; content: string };
+
+// Measured: a full planner-sized prompt against ark-code-latest completes in
+// ~50s. 90s gives headroom without letting one attempt eat the whole step budget.
+const GATEWAY_TIMEOUT_MS = 90_000;
 
 export async function callLlm(env: Env, prompt: string, opts: LlmOptions = {}): Promise<string> {
   const { systemPrompt = "", temperature = 0.8, maxTokens = 16384, jsonMode = false } = opts;
@@ -54,6 +65,7 @@ export async function callLlm(env: Env, prompt: string, opts: LlmOptions = {}): 
 
 // ── Provider 1: external OpenAI-compatible gateway (火山方舟 Agent Plan) ────
 
+/** Exactly one HTTP attempt with a hard timeout — no internal retry (see module doc). */
 async function callGateway(
   env: Env,
   apiKey: string,
@@ -72,49 +84,38 @@ async function callGateway(
   };
   if (o.jsonMode) payload.response_format = { type: "json_object" };
 
-  const timeoutMs = parseInt(env.LLM_TIMEOUT_MS || "300000", 10);
-  const maxRetries = 3;
-  let lastError: unknown = null;
-
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), timeoutMs);
-      let resp: Response;
-      try {
-        resp = await fetch(`${baseUrl}/chat/completions`, {
-          method: "POST",
-          headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-          signal: controller.signal,
-        });
-      } finally {
-        clearTimeout(timer);
-      }
-
-      if (!resp.ok) {
-        const text = await resp.text();
-        console.error(`Gateway ${resp.status}: ${text.slice(0, 500)}`);
-        if (resp.status >= 400 && resp.status < 500) throw new Error(`Gateway ${resp.status}`);
-        throw new Error(`Gateway ${resp.status}`);
-      }
-
-      const data = (await resp.json()) as any;
-      const choice = data.choices?.[0] ?? {};
-      const content: string = choice.message?.content || "";
-      console.log(`Gateway OK model=${model} content=${content.length} finish=${choice.finish_reason}`);
-      return content.trim();
-    } catch (e) {
-      lastError = e;
-      console.warn(`Gateway error (attempt ${attempt + 1}/${maxRetries}): ${e}`);
-      if (attempt < maxRetries - 1) await new Promise((r) => setTimeout(r, 2 ** attempt * 1000));
-    }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), GATEWAY_TIMEOUT_MS);
+  let resp: Response;
+  try {
+    resp = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+  } catch (e) {
+    throw new Error(`Gateway request failed: ${e}`);
+  } finally {
+    clearTimeout(timer);
   }
-  throw lastError instanceof Error ? lastError : new Error("Gateway call failed");
+
+  if (!resp.ok) {
+    const text = await resp.text();
+    console.error(`Gateway ${resp.status}: ${text.slice(0, 500)}`);
+    throw new Error(`Gateway ${resp.status}`);
+  }
+
+  const data = (await resp.json()) as any;
+  const choice = data.choices?.[0] ?? {};
+  const content: string = choice.message?.content || "";
+  console.log(`Gateway OK model=${model} content=${content.length} finish=${choice.finish_reason}`);
+  return content.trim();
 }
 
 // ── Provider 2: Cloudflare Workers AI (free) ────────────────────────────────
 
+/** Exactly one attempt — no internal retry (see module doc). */
 async function callWorkersAI(
   env: Env,
   messages: ChatMessage[],
@@ -127,21 +128,10 @@ async function callWorkersAI(
   const input: Record<string, unknown> = { messages, max_tokens: maxTokens, temperature: o.temperature };
   if (o.jsonMode) input.response_format = { type: "json_object" };
 
-  const maxRetries = 2;
-  let lastError: unknown = null;
-  for (let attempt = 0; attempt < maxRetries; attempt++) {
-    try {
-      const resp = (await env.AI.run(model as keyof AiModels, input as any)) as any;
-      const content: string = resp?.response ?? "";
-      console.log(`Workers AI OK model=${model} content=${content.length}`);
-      return content.trim();
-    } catch (e) {
-      lastError = e;
-      console.warn(`Workers AI error (attempt ${attempt + 1}/${maxRetries}): ${e}`);
-      if (attempt < maxRetries - 1) await new Promise((r) => setTimeout(r, 1000));
-    }
-  }
-  throw lastError instanceof Error ? lastError : new Error("Workers AI call failed");
+  const resp = (await env.AI.run(model as keyof AiModels, input as any)) as any;
+  const content: string = resp?.response ?? "";
+  console.log(`Workers AI OK model=${model} content=${content.length}`);
+  return content.trim();
 }
 
 /** Parse JSON from an LLM response — strips markdown fences, then falls back to

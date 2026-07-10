@@ -2,9 +2,17 @@
  * OffroadTripWorkflow — the 6-stage pipeline as durable Workflow steps.
  *
  * Each step.do(...) is independently retried and gets its own CPU budget, which
- * is why a 2-3 minute LLM pipeline fits Cloudflare Workers' per-invocation limits.
- * Progress is pushed to the ProgressCoordinator DO (keyed by instanceId) so the
- * client's SSE stream can follow along.
+ * is why a several-minute LLM pipeline fits Cloudflare Workers' per-invocation
+ * limits. Progress is pushed to the ProgressCoordinator DO (keyed by instanceId)
+ * so the client's SSE stream can follow along.
+ *
+ * Timeout/retry discipline: LLM-calling steps (planning, enrichment) set an
+ * EXPLICIT step timeout + retry limit sized around llm.ts's measured per-attempt
+ * cost, instead of relying on the Workflow default (10min timeout, effectively
+ * unbounded retries). Without that, a single slow LLM call gets killed by the
+ * default step timeout mid-attempt, the step retries, hits the same timeout
+ * again, and repeats — which is exactly what caused planning to appear stuck at
+ * 30% for hours in production (see git history for the incident).
  */
 
 import { WorkflowEntrypoint, type WorkflowEvent, type WorkflowStep } from "cloudflare:workers";
@@ -42,9 +50,21 @@ export class OffroadTripWorkflow extends WorkflowEntrypoint<Env, Params> {
       const weatherMap = (await step.do("weather", () => stageWeather(this.env, req))) as Record<string, WeatherData>;
       await emit({ stage: "weather", status: "done", message: "天气获取完成", progress: 25 });
 
-      // Stage 3: planning (LLM)
+      // Stage 3: planning (LLM). llm.ts makes exactly one attempt per gateway key
+      // (90s hard timeout each, 2 keys = 180s worst case) with no internal retry
+      // loop, then falls back to Workers AI if both keys fail — retrying lives
+      // here, at the Workflow step level, so worst-case latency is additive
+      // (attempts × step timeout) instead of multiplicative (internal retries ×
+      // step retries), which is what previously let one slow call get killed by
+      // the Workflow's default step timeout mid-retry and then hang for hours on
+      // the next retry repeating the same over-budget operation. 4min gives
+      // headroom above the 180s two-key worst case for the Workers AI fallback.
       await emit({ stage: "planning", status: "running", message: "AI正在规划越野路线...", progress: 30 });
-      let routeData = (await step.do("planning", () => stagePlanning(this.env, req, weatherMap, geoInfo))) as RouteData;
+      let routeData = (await step.do(
+        "planning",
+        { timeout: "4 minutes", retries: { limit: 2, delay: "10 seconds", backoff: "exponential" } },
+        () => stagePlanning(this.env, req, weatherMap, geoInfo)
+      )) as RouteData;
       await emit({ stage: "planning", status: "done", message: `路线规划完成：${routeData.title ?? ""}`, progress: 50 });
 
       // Stage 4: routing + POI geocode
@@ -57,9 +77,14 @@ export class OffroadTripWorkflow extends WorkflowEntrypoint<Env, Params> {
         progress: 70,
       });
 
-      // Stage 5: enrichment (LLM, per-day)
+      // Stage 5: enrichment (LLM, per-day, parallel — see stageEnrichment's
+      // Promise.allSettled). A few extra minutes of headroom for many days.
       await emit({ stage: "enrichment", status: "running", message: "正在丰富景点、美食、历史故事...", progress: 75 });
-      routeData = (await step.do("enrichment", () => stageEnrichment(this.env, routeData))) as RouteData;
+      routeData = (await step.do(
+        "enrichment",
+        { timeout: "6 minutes", retries: { limit: 1, delay: "10 seconds" } },
+        () => stageEnrichment(this.env, routeData)
+      )) as RouteData;
       await emit({ stage: "enrichment", status: "done", message: "内容丰富完成", progress: 90 });
 
       // Stage 6: assembly
