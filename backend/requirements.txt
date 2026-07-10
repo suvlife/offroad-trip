@@ -7,3 +7,8 @@ httpx
 python-multipart
 # PostgreSQL driver (optional - only needed for PostgreSQL prod)
 # Install separately for production: pip install psycopg2-binary
+
+# Testing
+pytest>=8.0
+pytest-asyncio>=0.24
+pytest-cov>=6.0
