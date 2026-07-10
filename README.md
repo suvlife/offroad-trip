@@ -15,7 +15,8 @@
 - 🍽️ **深度内容** — 景点特色说明（"为什么值得去"）、美食背后的故事、历史人物事件趣事
 - 🎬 **抖音视频** — 为每个景点/美食/故事生成抖音搜索跳转链接
 - 🌤️ **天气感知** — 结合出发时间天气，雨天降级越野路段，极端天气绕行建议
-- 🔧 **大模型驱动** — 火山方舟 Agent Plan（`ark-code-latest`）为主，Cloudflare Workers AI 为免费兜底
+- 🔧 **大模型驱动** — 火山方舟 Agent Plan（`ark-code-latest`）为主，Cloudflare Workers AI 为免费兜底，双 key 自动主备切换
+- ⏱️ **稳定的超时/重试设计** — 每个 LLM 调用单次尝试 + 硬超时，重试只在 Workflow step 层做一次，避免超时叠加导致流水线挂起（详见下文「稳定性设计」）
 
 ## 🏗️ 两套实现
 
@@ -51,7 +52,9 @@ npx wrangler kv namespace create GEO_CACHE
 npx wrangler d1 migrations apply offroadtrip --remote
 
 # 3. 配置 LLM（可选 —— 不配置则自动兜底到免费的 Cloudflare Workers AI）
-npx wrangler secret put SILK_GATEWAY_KEY      # 火山方舟 / 任何 OpenAI 兼容网关的 key
+# 火山方舟 Agent Plan 示例：model=ark-code-latest，
+# base URL=https://ark.cn-beijing.volces.com/api/plan/v3（也可用任何 OpenAI 兼容网关）
+npx wrangler secret put SILK_GATEWAY_KEY      # 主 key
 npx wrangler secret put SILK_GATEWAY_KEY_2    # 可选：第二把 key，主 key 失败时自动切换
 
 # 4. 构建前端并部署
@@ -184,6 +187,16 @@ offroad-trip/
 - 🍽️ 地方美食：姚记炒肝店（含京承饮食渊源故事）
 - 📖 历史故事：磬锤峰"康熙赐名"典故
 - 💰 费用估算：¥1972（含油费/过路费/住宿/餐饮/门票明细）
+- ⏱️ 全流程实测约 2 分钟完成
+
+## 🛡️ 稳定性设计：超时与重试
+
+`workers/` 版的 LLM 调用遵循一条硬规则：**重试只在一层发生**。
+
+- `services/llm.ts` 对每把网关 key 只发起**一次** HTTP 请求，90 秒硬超时（实测火山方舟完整规划请求约 50 秒返回），不做内部重试；失败就换下一把 key，两把都失败则兜底到免费的 Cloudflare Workers AI。
+- 真正的重试逻辑放在 `workflow.ts` 的 `step.do(...)` 显式配置里（`planning` 步骤：4 分钟超时、最多 2 次重试；`enrichment` 同理）。
+
+这么设计是因为踩过一个坑：如果内部重试（3次 × 5分钟超时）和 Workflow 层的默认重试（10分钟超时、近乎无限重试）同时存在，两者是**乘法叠加**而不是加法——一次稍慢的调用会被 Workflow 默认超时中途强杀，然后整个步骤重跑，又撞上同样的问题，如此循环。线上曾因此在"AI正在规划越野路线...30%"卡住 8 小时以上。现在两层只有一层负责重试，最坏耗时可预测、有边界。
 
 ## 🛠️ 技术栈
 
