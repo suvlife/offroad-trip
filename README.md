@@ -2,64 +2,69 @@
 
 > 大模型智能体驱动的越野自驾游路线规划平台
 
-结合多阶段 AI Agent 流水线、腾讯地图可视化、移动优先明亮风格，为越野自驾爱好者提供个性化路线规划。根据出发地、目的地、时间、车型和天气，生成包含特色景点、地方美食、历史故事、抖音视频链接的完整行程。
+结合多阶段 AI Agent 流水线、地图可视化、移动优先明亮风格，为越野自驾爱好者提供个性化路线规划。根据出发地、目的地、时间、车型和天气，生成包含特色景点、地方美食、历史故事、抖音视频链接的完整行程。
 
-**在线演示**：填写出发地、目的地、天数，AI 在 2-3 分钟内生成完整越野路线，含逐日行程、景点特色、美食故事、历史典故、抖音视频链接。
+**在线体验**：https://offroad.guofeng.me — 填写出发地、目的地、天数，AI 在 1-2 分钟内生成完整越野路线，含逐日行程、景点特色、美食故事、历史典故、抖音视频链接。
 
 ## ✨ 核心特性
 
 - 🤖 **多智能体编排** — 6 阶段 Agent 流水线（地理编码→天气→LLM规划→路况细化→内容丰富→组装），SSE 实时推送进度
-- 🗺️ **腾讯地图可视化** — JS API GL 3D 视角、按天分色路线、POI 自定义标记、卫星图层
+- 🗺️ **地图可视化** — 3D 视角、按天分色路线、POI 自定义标记
 - 🌿 **越野自然主题** — 轻度越野路线推荐，车型感知（SUV 可走非铺装路，轿车只走铺装路），天气影响越野决策
 - 📱 **移动优先** — 底部抽屉日程、卡片式内容、明亮自然风格（绿/蓝/橙配色）
 - 🍽️ **深度内容** — 景点特色说明（"为什么值得去"）、美食背后的故事、历史人物事件趣事
 - 🎬 **抖音视频** — 为每个景点/美食/故事生成抖音搜索跳转链接
 - 🌤️ **天气感知** — 结合出发时间天气，雨天降级越野路段，极端天气绕行建议
-- 🔧 **大模型 + Skill** — 火山方舟 Agent Plan glm-5.2 驱动，内置 ZCode Skill 可独立运行
+- 🔧 **大模型驱动** — 火山方舟 Agent Plan（`ark-code-latest`）为主，Cloudflare Workers AI 为免费兜底
 
-## 🏗️ 架构
+## 🏗️ 两套实现
 
-```
-┌─────────────────────────────────────────────────────┐
-│             前端 (Vue3 + TailwindCSS)                │
-│  HomeView → PlanningView(SSE进度) → RouteView(地图)   │
-└──────────────────────┬──────────────────────────────┘
-                       │ SSE (fetch stream)
-┌──────────────────────▼──────────────────────────────┐
-│              后端 (FastAPI)                           │
-│                                                      │
-│  ┌─────────────────────────────────────────────┐    │
-│  │          Orchestrator (6阶段编排)             │    │
-│  │                                              │    │
-│  │  1.地理编码 → 2.天气 → 3.LLM规划              │    │
-│  │  → 4.路况细化 → 5.内容丰富 → 6.组装           │    │
-│  └──────┬──────────┬──────────┬────────────────┘    │
-│         │          │          │                      │
-│    ┌────▼───┐ ┌────▼───┐ ┌────▼────────┐           │
-│    │腾讯地图│ │和风天气│ │火山方舟     │           │
-│    │  API   │ │  API   │ │ glm-5.2 LLM│           │
-│    └────────┘ └────────┘ └─────────────┘           │
-│         │          │          │                      │
-│    ┌────▼──────────▼──────────▼────┐                │
-│    │     PostgreSQL / SQLite        │                │
-│    └────────────────────────────────┘                │
-└─────────────────────────────────────────────────────┘
-```
+本仓库包含**两套后端实现**，功能等价：
+
+| | `workers/`（生产部署，推荐） | `backend/`（Python 参考实现） |
+|---|---|---|
+| 运行时 | Cloudflare Workers (TypeScript) | FastAPI (Python) |
+| 长流水线 | Cloudflare Workflows（durable steps） | asyncio 异步生成器 |
+| 进度推送 | Durable Object + SSE | 直接 SSE 流 |
+| 数据库 | Cloudflare D1 (SQLite) | PostgreSQL / SQLite |
+| 缓存 | Workers KV | 进程内内存 |
+| 地图/地理编码 | Nominatim (OSM) + OSRM，免费无 key | 腾讯地图（需 key，有兜底） |
+| 天气 | wttr.in，免费无 key | 和风天气（可选 key）+ wttr.in 兜底 |
+| 图片 | picsum.photos，免费无 key | Unsplash（可选 key）+ picsum 兜底 |
+| 部署形态 | 单 Worker（前端 Static Assets + API 同域） | Docker Compose（Nginx + FastAPI + Postgres） |
+
+线上服务 https://offroad.guofeng.me 跑的是 `workers/` 版本，除 LLM 外全部使用免费服务，零外部 key 依赖。`backend/` 保留作为参考实现和 [`skill/`](#-使用-skill) 独立 CLI 的运行依赖。
 
 ## 🚀 快速开始
 
-### 前置条件
+### 方式一：Cloudflare Workers（推荐）
 
-| Key | 用途 | 获取方式 | 免费 |
-|-----|------|---------|------|
-| `SILK_GATEWAY_URL` + `KEY` | LLM 接入（火山方舟） | [console.volcengine.com/ark](https://console.volcengine.com/ark) | 按量付费 |
-| `QQ_MAP_KEY` | 腾讯地图路线/POI/地理编码 | [lbs.qq.com](https://lbs.qq.com) | ✅ 个人免费 |
-| `QWEATHER_KEY` | 和风天气（可选） | [dev.qweather.com](https://dev.qweather.com) | ✅ 1000次/天 |
-| `UNSPLASH_KEY` | 景点/美食照片（可选） | [unsplash.com/developers](https://unsplash.com/developers) | ✅ 50次/小时 |
+```bash
+cd workers
+npm install
 
-> 无 key 时各服务有优雅降级（mock 数据/占位图/wttr.in 兜底天气），不阻塞开发。
+# 1. 创建 D1 数据库 + KV 命名空间，把返回的 id 填进 wrangler.toml
+npx wrangler d1 create offroadtrip
+npx wrangler kv namespace create GEO_CACHE
 
-### 本地开发
+# 2. 应用数据库迁移
+npx wrangler d1 migrations apply offroadtrip --remote
+
+# 3. 配置 LLM（可选 —— 不配置则自动兜底到免费的 Cloudflare Workers AI）
+npx wrangler secret put SILK_GATEWAY_KEY      # 火山方舟 / 任何 OpenAI 兼容网关的 key
+npx wrangler secret put SILK_GATEWAY_KEY_2    # 可选：第二把 key，主 key 失败时自动切换
+
+# 4. 构建前端并部署
+cd ../frontend && npm install && npm run build
+cd ../workers && npx wrangler deploy
+
+# 5.（可选）绑定自定义域名
+npx wrangler deploy   # 之后在 Cloudflare Dashboard 或 API 绑定 Workers 自定义域名
+```
+
+本地开发：`npx wrangler dev`（D1/KV 使用本地模拟，无需真实凭据）。
+
+### 方式二：本地 Python + Vue（Docker 或裸机）
 
 ```bash
 # 1. 克隆仓库
@@ -68,7 +73,7 @@ cd offroad-trip
 
 # 2. 配置后端环境变量
 cp backend/.env.example backend/.env
-# 编辑 backend/.env 填入你的 API key
+# 编辑 backend/.env 填入你的 API key（无 key 时各服务优雅降级）
 
 # 3. 启动后端（使用 SQLite，无需 Docker）
 cd backend
@@ -85,26 +90,33 @@ pnpm dev
 
 打开 **http://localhost:5173** 即可使用。
 
-### Docker 部署
+或者一键 Docker 部署：
 
 ```bash
-# 配置环境变量
 cp backend/.env.example .env
 # 编辑 .env 填入所有 key
-
-# 一键启动（PostgreSQL + 后端 + 前端）
 docker-compose up -d
-
-# 前端: http://localhost
-# 后端: http://localhost:8000
-# API 文档: http://localhost:8000/docs
+# 前端: http://localhost ｜ 后端: http://localhost:8000 ｜ API 文档: http://localhost:8000/docs
 ```
 
 ## 📁 项目结构
 
 ```
 offroad-trip/
-├── backend/                    # FastAPI 后端
+├── workers/                    # ★ Cloudflare Workers 后端（生产部署）
+│   ├── src/
+│   │   ├── index.ts            # Hono 路由 + 静态资源入口
+│   │   ├── workflow.ts          # OffroadTripWorkflow：6 阶段 durable steps
+│   │   ├── progress-do.ts       # ProgressCoordinator Durable Object（SSE 推送）
+│   │   ├── pipeline.ts          # 6 阶段流水线逻辑 + 内容丰富 agent
+│   │   ├── prompts.ts           # Prompt 模板
+│   │   ├── db.ts                # D1 持久化
+│   │   ├── types.ts             # 共享类型 + Env 绑定
+│   │   └── services/            # geo(Nominatim) / routing(OSRM) / weather(wttr.in)
+│   │                            # / images(picsum) / douyin / cost / llm(火山方舟+Workers AI)
+│   ├── migrations/0001_init.sql # D1 schema（9 张表）
+│   └── wrangler.toml
+├── backend/                    # Python 参考实现（FastAPI）
 │   ├── app/
 │   │   ├── main.py             # 入口
 │   │   ├── config.py           # 配置（火山方舟/腾讯地图/和风天气）
@@ -112,98 +124,83 @@ offroad-trip/
 │   │   ├── models/route.py     # 9 张表（含越野/历史/抖音字段）
 │   │   ├── schemas/route.py    # Pydantic 模型（前后端字段统一）
 │   │   ├── routers/            # API 路由
-│   │   │   ├── generate.py     # POST /api/generate（SSE 流式）
-│   │   │   ├── routes.py       # 路线 CRUD + 分享
-│   │   │   └── weather.py      # 天气 + 城市搜索
-│   │   ├── agents/             # ★ 智能体编排层
-│   │   │   ├── orchestrator.py # 6 阶段流水线 + SSE 事件
-│   │   │   ├── planner_agent.py# 路线规划（越野/自然主题）
-│   │   │   ├── content_agents.py# 景点/美食/历史丰富（并行）
-│   │   │   └── weather_agent.py# 天气决策
-│   │   ├── services/           # 外部服务
-│   │   │   ├── llm_service.py  # 火山方舟接入（重试+推理模型支持）
-│   │   │   ├── qqmap_service.py# 腾讯地图（地理编码/路径/POI + polyline解压）
-│   │   │   ├── weather_service.py
-│   │   │   ├── cost_service.py # 费用引擎
-│   │   │   ├── image_service.py# Unsplash 图片
-│   │   │   └── douyin_service.py# 抖音搜索链接生成
+│   │   ├── agents/             # 智能体编排层（orchestrator + planner + content + weather）
+│   │   ├── services/           # 外部服务（LLM/腾讯地图/天气/费用/图片/抖音）
 │   │   └── prompts/            # Prompt 模板
-│   │       ├── planner.py      # 越野路线规划
-│   │       └── content.py      # 景点/美食/历史
+│   ├── tests/                  # pytest（cost/schemas/routes API/content agents/generate API）
 │   ├── requirements.txt
 │   └── Dockerfile
-├── frontend/                   # Vue3 前端
+├── frontend/                   # Vue3 前端（两套后端共用）
 │   ├── src/
-│   │   ├── views/              # 4 个页面
-│   │   │   ├── HomeView.vue    # 输入表单
-│   │   │   ├── PlanningView.vue# SSE 进度可视化
-│   │   │   ├── RouteView.vue   # 地图 + 底部抽屉日程
-│   │   │   └── ShareView.vue   # 分享页
+│   │   ├── views/              # HomeView / PlanningView(SSE进度) / RouteView(地图) / ShareView
 │   │   ├── stores/route.js     # Pinia 状态管理
 │   │   ├── utils/
-│   │   │   ├── qqmap.js        # 腾讯地图 GL（3D/路线/标记）
-│   │   │   ├── sse.js          # SSE 客户端（大JSON分片处理）
+│   │   │   ├── map.js          # MapLibre GL + 免费 OSM 瓦片（workers 版用）
+│   │   │   ├── sse.js          # SSE 客户端（两步流：POST 启动 + GET 订阅进度）
 │   │   │   └── ...
 │   │   └── assets/main.css     # Tailwind + 明亮主题
 │   ├── Dockerfile
 │   └── nginx.conf
-├── skill/                      # ZCode Skill
+├── skill/                      # ZCode Skill（依赖 backend/，独立 CLI）
 │   └── offroad-trip-planner/
-│       ├── SKILL.md            # 触发词 + 使用说明
-│       ├── scripts/            # 独立规划脚本（可脱离 Web 运行）
-│       └── references/         # 越野路线知识库
+│       ├── SKILL.md
+│       ├── scripts/plan_offroad_trip.py
+│       └── references/offroad-routes.md
 ├── docker-compose.yml
-└── README.md
+└── PLAN.md                     # Cloudflare 重构与部署的详细规划记录
 ```
 
 ## 🔌 API 端点
 
-| 方法 | 路径 | 说明 |
-|------|------|------|
-| POST | `/api/generate` | 生成路线（SSE 流式，返回 6 阶段进度 + 最终路线） |
-| GET | `/api/routes` | 路线列表 |
-| GET | `/api/routes/{id}` | 路线详情（含日程/景点/美食/故事/抖音链接） |
-| POST | `/api/routes/{id}/share` | 发布路线，生成分享链接 |
-| GET | `/api/share/{share_id}` | 分享页数据（只读） |
-| GET | `/api/weather?city=&days=` | 天气查询 |
-| GET | `/api/cities?q=` | 城市搜索（腾讯地图自动补全） |
+两套后端 API 形状基本一致，`workers/` 版的生成流程分两步（启动 + SSE 订阅），因为 Cloudflare Workflows 是异步任务模型：
+
+| 方法 | 路径 | 说明 | workers/ | backend/ |
+|------|------|------|:---:|:---:|
+| POST | `/api/generate` | 启动路线生成 | 返回 `{instanceId}` | 直接 SSE 流 |
+| GET | `/api/stream/:instanceId` | SSE 进度 + 最终路线 | ✅ | — |
+| GET | `/api/routes` | 路线列表 | ✅ | ✅ |
+| GET | `/api/routes/{id}` | 路线详情 | ✅ | ✅ |
+| POST | `/api/routes/{id}/share` | 发布路线，生成分享链接 | ✅ | ✅ |
+| DELETE | `/api/routes/{id}` | 删除路线 | ✅ | ✅ |
+| GET | `/api/share/{share_id}` | 分享页数据（只读） | ✅ | ✅ |
+| GET | `/api/weather?city=&days=` | 天气查询 | ✅ | ✅ |
 
 ## 🤖 智能体流水线
 
-用户点击"开始规划路线"后，后端执行 6 阶段 Agent 流水线，通过 SSE 实时推送进度：
+用户点击"开始规划路线"后，后端执行 6 阶段 Agent 流水线，进度实时推送到前端：
 
-| 阶段 | 说明 | 数据源 |
-|------|------|--------|
-| 1. 地理编码 | 出发地/目的地 → 坐标 | 腾讯地图 WebService |
-| 2. 天气查询 | 沿途城市逐日天气 → 越野决策 | 和风天气 / wttr.in |
-| 3. LLM 规划 | 生成路线骨架（车型/天气感知） | 火山方舟 glm-5.2 |
-| 4. 路况细化 | 每段获取 polyline/里程/过路费 | 腾讯地图路径规划 |
-| 5. 内容丰富 | 景点特色/美食故事/历史典故（并行） | 火山方舟 glm-5.2 |
-| 6. 组装 | 图片/抖音链接/费用计算/落库 | Unsplash + 费用引擎 |
+| 阶段 | 说明 | workers/ 数据源 | backend/ 数据源 |
+|------|------|--------|--------|
+| 1. 地理编码 | 出发地/目的地/沿途景点 → 坐标 | Nominatim（免费，KV 缓存） | 腾讯地图 WebService |
+| 2. 天气查询 | 沿途城市逐日天气 → 越野决策 | wttr.in（免费） | 和风天气 / wttr.in |
+| 3. LLM 规划 | 生成路线骨架（车型/天气感知） | 火山方舟 `ark-code-latest` | 火山方舟 glm-5.2 |
+| 4. 路况细化 | 每段获取 polyline/里程/过路费 | OSRM（免费） | 腾讯地图路径规划 |
+| 5. 内容丰富 | 景点特色/美食故事/历史典故（按天并行） | 火山方舟 | 火山方舟 |
+| 6. 组装 | 图片/抖音链接/费用计算/落库 | picsum + D1 | Unsplash + PostgreSQL/SQLite |
 
-**生成内容示例**（北京→沈阳 3 天）：
-- 📌 路线标题："燕山辽河穿越之旅：从帝都到盛京的山野古道"
-- 🎯 特色景点：草原天路、独石口长城、辽河源国家森林公园、牛河梁红山文化遗址、医巫闾山、沈阳故宫
-- 🍽️ 地方美食：凌源豆腐脑、蒙古贞馅饼（含背后的故事）
-- 📖 历史故事：皇太极与海兰珠、耶律倍望海堂藏书、努尔哈赤迁都沈阳
-- 🎬 抖音链接：每个景点/美食/故事都有对应的抖音搜索跳转链接
+**生成内容示例**（北京→承德 2 天，`workers/` 线上实测）：
+- 📌 路线标题："京承秘境：燕山山脉避暑寻幽之旅"
+- 🎯 特色景点：白河湾自然风景区、金山岭长城、磬锤峰国家森林公园、僧冠峰
+- 🍽️ 地方美食：姚记炒肝店（含京承饮食渊源故事）
+- 📖 历史故事：磬锤峰"康熙赐名"典故
+- 💰 费用估算：¥1972（含油费/过路费/住宿/餐饮/门票明细）
 
 ## 🛠️ 技术栈
 
-| 层 | 技术 |
-|---|---|
-| 后端 | FastAPI + SQLAlchemy 2.0 + Pydantic v2 + httpx |
-| LLM | 火山方舟 Agent Plan（glm-5.2，1M 上下文，推理模型） |
-| 地图 | 腾讯位置服务（WebService API + JS API GL 3D） |
-| 天气 | 和风天气（QWeather）+ wttr.in 兜底 |
-| 图片 | Unsplash + Picsum 占位图 |
-| 前端 | Vue3 + Vite 5 + Pinia + TailwindCSS 3 |
-| 部署 | Docker Compose（PostgreSQL + FastAPI + nginx） |
-| Skill | ZCode Skill（可独立运行的路线规划脚本） |
+| 层 | `workers/`（生产） | `backend/`（参考实现） |
+|---|---|---|
+| 运行时/框架 | Cloudflare Workers + Hono | FastAPI + SQLAlchemy 2.0 + Pydantic v2 |
+| 长流水线 | Cloudflare Workflows | asyncio |
+| 进度推送 | Durable Objects + SSE | SSE (StreamingResponse) |
+| 数据库 | Cloudflare D1 | PostgreSQL / SQLite |
+| 缓存 | Workers KV | 无（进程内） |
+| LLM | 火山方舟 Agent Plan + Cloudflare Workers AI 兜底 | 火山方舟 Agent Plan |
+| 静态托管 | Workers Static Assets | Nginx (Docker) |
+| 前端 | Vue3 + Vite 5 + Pinia + TailwindCSS 3 + MapLibre GL | 同左 + 腾讯地图 JS API GL |
 
 ## 🎯 使用 Skill
 
-本仓库内置 ZCode Skill，可独立运行路线规划（无需启动 Web 服务）：
+本仓库内置 ZCode Skill，依赖 `backend/`，可独立运行路线规划（无需启动 Web 服务）：
 
 ```bash
 # 安装 skill（链接到 ZCode skills 目录）
@@ -215,6 +212,17 @@ python skill/offroad-trip-planner/scripts/plan_offroad_trip.py \
 ```
 
 需要环境变量：`SILK_GATEWAY_URL`、`SILK_GATEWAY_KEY`、`QQ_MAP_KEY`
+
+## 🧪 测试
+
+```bash
+cd backend
+python3 -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+python -m pytest tests/ -v
+```
+
+覆盖费用引擎、Pydantic schema 校验、路线 CRUD API、内容丰富 agent 的按天分组逻辑、生成 API 的 DB id 回传逻辑。
 
 ## 📄 License
 

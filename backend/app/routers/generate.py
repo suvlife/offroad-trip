@@ -27,42 +27,45 @@ async def generate_route(req: GenerateRequest):
     """
 
     async def event_stream():
-        final_route_data = None
-        try:
-            async for sse_event in generate_route_stream(
-                departure=req.departure,
-                destination=req.destination,
-                start_date=req.start_date,
-                days=req.days,
-                trip_type=req.trip_type,
-                vehicle_type=req.vehicle_type,
-                adults=req.adults,
-                children=req.children,
-                budget=req.budget,
-                theme=req.theme,
-                preferences=req.preferences,
-            ):
-                yield sse_event
-
-                # Capture the final route data to save to DB
-                if sse_event.startswith("data: ") and '"route"' in sse_event:
-                    try:
-                        payload = json.loads(sse_event[6:].strip())
-                        if payload.get("route"):
-                            final_route_data = payload["route"]
-                    except json.JSONDecodeError:
-                        pass
-        finally:
-            # Save to database with a fresh session and inject the ID
-            if final_route_data:
-                db = SessionLocal()
+        async for sse_event in generate_route_stream(
+            departure=req.departure,
+            destination=req.destination,
+            start_date=req.start_date,
+            days=req.days,
+            trip_type=req.trip_type,
+            vehicle_type=req.vehicle_type,
+            adults=req.adults,
+            children=req.children,
+            budget=req.budget,
+            theme=req.theme,
+            preferences=req.preferences,
+        ):
+            # Intercept the final route event: persist to DB and inject the
+            # generated id BEFORE forwarding to the client, so the frontend
+            # receives a route it can later refetch / share by id.
+            if sse_event.startswith("data: ") and '"route"' in sse_event:
                 try:
-                    route_id = _save_route_to_db(db, final_route_data)
-                    final_route_data["id"] = route_id
-                except Exception as e:
-                    logger.error(f"Failed to save route to DB: {e}")
-                finally:
-                    db.close()
+                    payload = json.loads(sse_event[6:].strip())
+                except json.JSONDecodeError:
+                    yield sse_event
+                    continue
+
+                route_data = payload.get("route")
+                if route_data:
+                    db = SessionLocal()
+                    try:
+                        route_id = _save_route_to_db(db, route_data)
+                        route_data["id"] = route_id
+                    except Exception as e:
+                        logger.error(f"Failed to save route to DB: {e}")
+                    finally:
+                        db.close()
+                    payload["route"] = route_data
+                    yield f"data: {json.dumps(payload, ensure_ascii=False, default=str)}\n\n"
+                else:
+                    yield sse_event
+            else:
+                yield sse_event
 
     return StreamingResponse(
         event_stream(),
@@ -232,5 +235,9 @@ def _save_route_to_db(db: Session, route_data: dict):
             db.add(wf)
 
     db.commit()
+    # Expose persisted identifiers back through the route dict so the SSE final
+    # event can carry them to the frontend (enables refetch + share by id).
+    route_data["id"] = route.id
+    route_data["share_id"] = share_id
     logger.info(f"Route saved: {route.id} (share_id: {share_id})")
     return route.id

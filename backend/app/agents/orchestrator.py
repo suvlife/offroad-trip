@@ -75,7 +75,6 @@ async def generate_route_stream(
         weather_cities = [departure, destination]
         weather_map = await weather_agent.fetch_weather_for_cities(weather_cities, days)
         weather_info = weather_agent.format_weather_for_planner(weather_map)
-        weather_advisory = await weather_agent.generate_advisory(weather_map)
 
         yield await _emit("weather", "done", "天气获取完成", 25)
 
@@ -98,9 +97,30 @@ async def generate_route_stream(
             geo_info=geo_info,
         )
 
-        # Add weather advisory to each day plan
+        # Add a per-day weather advisory keyed on each day's destination city,
+        # instead of copying the whole-route advisory blob onto every day.
+        # Waypoint cities not in the initial fetch get their weather lazily.
+        plan_cities = []
         for day in route_data.get("day_plans", []):
-            day["weather_advisory"] = weather_advisory
+            segs = day.get("segments", [])
+            city = ""
+            if segs:
+                city = segs[-1].get("to_name", "") or segs[0].get("from_name", "")
+            if city and city not in weather_map and city not in plan_cities:
+                plan_cities.append(city)
+
+        if plan_cities:
+            extra = await weather_agent.fetch_weather_for_cities(plan_cities, days)
+            weather_map.update(extra)
+
+        for day in route_data.get("day_plans", []):
+            segs = day.get("segments", [])
+            city = ""
+            if segs:
+                city = segs[-1].get("to_name", "") or segs[0].get("from_name", "")
+            day["weather_advisory"] = await weather_agent.advisory_for_city(
+                weather_map, city
+            )
 
         yield await _emit("planning", "done", f"路线规划完成：{route_data.get('title', '')}", 50)
 
@@ -139,6 +159,26 @@ async def generate_route_stream(
             day["day_duration"] = round(day_duration, 1)
             total_distance += day_distance
             total_duration += day_duration
+
+            # Geocode POIs so map markers land on real coordinates instead of
+            # falling back to city centers on the frontend. The LLM does not
+            # return coordinates; the endpoint city is a decent anchor and
+            # geocode() is cached, so this is cheap. Fall back to the day's
+            # destination city center when the POI name can't be resolved.
+            day_city = ""
+            segs = day.get("segments", [])
+            if segs:
+                day_city = segs[-1].get("to_name", "") or segs[0].get("from_name", "")
+            for poi in day.get("pois", []):
+                if poi.get("lat") and poi.get("lng"):
+                    continue
+                name = poi.get("name", "")
+                geo = await qqmap_service.geocode(name) if name else None
+                if not geo and day_city:
+                    geo = await qqmap_service.geocode(day_city)
+                if geo:
+                    poi["lat"] = geo["lat"]
+                    poi["lng"] = geo["lng"]
 
         route_data["total_distance"] = round(total_distance, 1)
         route_data["total_duration"] = round(total_duration, 1)

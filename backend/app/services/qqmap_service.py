@@ -86,7 +86,25 @@ CITY_COORDS_FALLBACK = {
 }
 
 
+_geocode_cache: Dict[str, Optional[Dict[str, Any]]] = {}
+
+
 async def geocode(address: str) -> Optional[Dict[str, Any]]:
+    """Geocode an address to coordinates (in-process cached to cut repeat calls).
+
+    The pipeline geocodes the same cities many times (segment endpoints, POIs,
+    per-day hotels). Caching by address avoids redundant API calls / quota burn.
+    """
+    if not address:
+        return None
+    if address in _geocode_cache:
+        return _geocode_cache[address]
+    result = await _geocode_impl(address)
+    _geocode_cache[address] = result
+    return result
+
+
+async def _geocode_impl(address: str) -> Optional[Dict[str, Any]]:
     """Geocode an address to coordinates.
 
     Returns: {"lat": float, "lng": float, "city": str, "province": str, "adcode": str}

@@ -136,64 +136,47 @@ async def enrich_history(city: str, scenic_names: List[str]) -> List[Dict]:
 
 
 async def enrich_all_cities(route_data: Dict[str, Any]) -> Dict[str, Any]:
-    """Enrich all cities in the route in parallel.
+    """Enrich every day's POIs, meals, and history in parallel.
 
-    Runs scenic, food, and history agents for each city concurrently.
+    POIs/meals belong to a day_plan, so we group by day (not by city) and enrich
+    each item exactly once, using the day's destination city (last segment's
+    to_name) as LLM context. This avoids the previous behaviour where a POI on a
+    multi-segment day (A->B->C) was collected under every endpoint city and thus
+    enriched several times, with concurrent tasks mutating the same POI dict.
     """
     import asyncio
 
-    # Group POIs and meals by city (using segment to_name as city proxy)
-    city_data: Dict[str, Dict] = {}
+    tasks = []
+    task_meta = []  # parallel list: (kind, day) describing each task
 
     for day in route_data.get("day_plans", []):
-        day_cities = set()
-        for seg in day.get("segments", []):
-            day_cities.add(seg.get("to_name", ""))
-            day_cities.add(seg.get("from_name", ""))
+        segments = day.get("segments", [])
+        city = ""
+        if segments:
+            city = segments[-1].get("to_name", "") or segments[0].get("from_name", "")
+        if not city:
+            city = day.get("theme", "") or route_data.get("destination", "")
 
-        for city in day_cities:
-            if not city:
-                continue
-            if city not in city_data:
-                city_data[city] = {"pois": [], "meals": [], "scenic_names": []}
+        pois = day.get("pois", [])
+        meals = day.get("meals", [])
+        scenic_names = [p.get("name", "") for p in pois if p.get("name")]
 
-            # Collect POIs for this city (all POIs in days that touch this city)
-            for poi in day.get("pois", []):
-                city_data[city]["pois"].append(poi)
-                city_data[city]["scenic_names"].append(poi.get("name", ""))
+        tasks.append(enrich_scenic(city, pois))
+        task_meta.append(("scenic", day))
+        tasks.append(enrich_food(city, meals))
+        task_meta.append(("food", day))
+        tasks.append(enrich_history(city, scenic_names))
+        task_meta.append(("history", day))
 
-            for meal in day.get("meals", []):
-                city_data[city]["meals"].append(meal)
+    results = await asyncio.gather(*tasks, return_exceptions=True)
 
-    # Run enrichment in parallel for all cities
-    tasks = []
-    cities = list(city_data.keys())
-
-    for city in cities:
-        data = city_data[city]
-        tasks.append(enrich_scenic(city, data["pois"]))
-        tasks.append(enrich_food(city, data["meals"]))
-        tasks.append(enrich_history(city, data["scenic_names"]))
-
-    results = await _run_tasks(tasks, cities)
-
-    # Collect all story cards
+    # Scenic/food results are merged in-place; history returns new story lists.
     all_stories = []
-    # results layout: for each city [scenic_result, food_result, history_result]
-    for i, city in enumerate(cities):
-        base = i * 3
-        # scenic and food results are merged in-place, history returns new list
-        if base + 2 < len(results):
-            history_result = results[base + 2]
-            if isinstance(history_result, list):
-                all_stories.extend(history_result)
+    for (kind, day), result in zip(task_meta, results):
+        if kind == "history" and isinstance(result, list):
+            for story in result:
+                story.setdefault("day_number", day.get("day_number", 0))
+            all_stories.extend(result)
 
     route_data["story_cards"] = all_stories
     return route_data
-
-
-async def _run_tasks(tasks, cities):
-    """Helper to run tasks and return results."""
-    import asyncio
-    results = await asyncio.gather(*tasks, return_exceptions=True)
-    return results

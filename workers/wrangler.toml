@@ -1,0 +1,55 @@
+name = "offroad-trip"
+main = "src/index.ts"
+compatibility_date = "2025-01-01"
+compatibility_flags = ["nodejs_compat"]
+account_id = "744c88ae324325511859d8869c5d9e86"
+
+# Single Worker serves BOTH the Vue frontend (Static Assets) and the /api routes.
+# Custom domain offroad.guofeng.me is attached after first deploy (see PLAN.md).
+# routes = [{ pattern = "offroad.guofeng.me", custom_domain = true }]
+
+# ── Frontend static assets (Vue build output) ────────────────
+[assets]
+directory = "../frontend/dist"
+binding = "ASSETS"
+# SPA: unmatched non-/api paths fall back to index.html (handled in index.ts).
+not_found_handling = "single-page-application"
+
+# ── D1 database ────────────────────────────────────────────────
+[[d1_databases]]
+binding = "DB"
+database_name = "offroadtrip"
+database_id = "5360134f-acd8-4cc4-8a3b-9c69840ac89e"
+migrations_dir = "migrations"
+
+# ── KV: geocode cache (replaces the in-process cache) ─────────
+[[kv_namespaces]]
+binding = "GEO_CACHE"
+id = "62a35f60f6444baeb212907fdad6dddc"
+
+# ── Workflows: the 6-stage pipeline ───────────────────────────
+[[workflows]]
+name = "offroad-trip-workflow"
+binding = "TRIP_WORKFLOW"
+class_name = "OffroadTripWorkflow"
+
+# ── Durable Object: SSE progress coordinator ──────────────────
+[[durable_objects.bindings]]
+name = "PROGRESS"
+class_name = "ProgressCoordinator"
+
+# ── Workers AI: the LLM (free, no key). Optional external gateway via secrets. ──
+[ai]
+binding = "AI"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ProgressCoordinator"]
+
+# ── Vars (non-secret). LLM keys set via `wrangler secret put`. ──
+[vars]
+LLM_MODEL = "ark-code-latest"
+SILK_GATEWAY_URL = "https://ark.cn-beijing.volces.com/api/plan/v3"
+WORKERS_AI_MODEL = "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+LLM_TIMEOUT_MS = "300000"
+NOMINATIM_UA = "offroad-trip/1.0 (https://offroad.guofeng.me)"

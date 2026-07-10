@@ -2,7 +2,7 @@
 import { ref, onMounted, computed, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { useRouteStore } from '@/stores/route'
-import { createMap, drawPolyline, addPOIMarkers, fitBounds, DAY_COLORS, hasMapKey } from '@/utils/qqmap'
+import { createMap, drawPolyline, addPOIMarkers, fitBounds, DAY_COLORS, hasMapKey } from '@/utils/map'
 import MarkdownIt from 'markdown-it'
 
 const md = new MarkdownIt({ html: false, breaks: true })
@@ -234,7 +234,7 @@ function formatDuration(hours) {
         <template v-if="mapErrorType === 'no_key'">
           <span class="text-4xl mb-3">🗺️</span>
           <p class="text-sm text-gray-500 text-center mb-2">地图可视化需要配置腾讯地图 Key</p>
-          <p class="text-xs text-gray-400 text-center">请在 .env 中设置 VITE_QQ_MAP_JS_KEY</p>
+          <p class="text-xs text-gray-400 text-center">地图初始化异常，请刷新重试</p>
         </template>
         <template v-else-if="mapErrorType === 'no_data'">
           <span class="text-4xl mb-3">📍</span>

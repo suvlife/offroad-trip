@@ -41,6 +41,23 @@ async def generate_advisory(weather_map: Dict[str, Dict[str, Any]]) -> str:
     return "\n\n".join(advisories)
 
 
+async def advisory_for_city(weather_map: Dict[str, Dict[str, Any]], city: str) -> str:
+    """Return the weather advisory for a single city (for per-day assignment).
+
+    Falls back to a partial-name match, then to a generic message so each day
+    gets a relevant advisory instead of the whole-route blob copied everywhere.
+    """
+    data = weather_map.get(city)
+    if data is None and city:
+        for name, d in weather_map.items():
+            if name and (name in city or city in name):
+                data = d
+                break
+    if data is None:
+        return "天气数据暂不可用，建议出发前查看实时天气。"
+    return await weather_service.get_weather_advisory(data)
+
+
 def format_weather_for_planner(weather_map: Dict[str, Dict[str, Any]]) -> str:
     """Format weather data as a concise string for the planner agent prompt."""
     lines = []

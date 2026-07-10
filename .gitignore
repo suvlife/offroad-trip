@@ -43,6 +43,11 @@ frontend/dist/
 frontend/.vite/
 *.local
 
+# Cloudflare Workers
+.wrangler/
+.dev.vars
+.dev.vars.*
+
 # Docker
 docker-compose.override.yml
 
